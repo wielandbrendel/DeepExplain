@@ -70,6 +70,7 @@ class AttributionMethod(object):
         self.T = T
         self.X = X
         self.xs = xs
+        self.attributions = None
         self.session = session
         self.keras_learning_phase = keras_learning_phase
         self.has_multiple_inputs = type(self.X) is list or type(self.X) is tuple
@@ -120,9 +121,10 @@ class GradientBasedMethod(AttributionMethod):
     def get_symbolic_attribution(self):
         return tf.gradients(self.T, self.X)
 
-    def run(self):
-        attributions = self.get_symbolic_attribution()
-        results =  self.session_run(attributions, self.xs)
+    def run(self, full=False):
+        if self.attributions is None or full:
+            self.attributions = self.get_symbolic_attribution()
+        results =  self.session_run(self.attributions, self.xs)
         return results[0] if not self.has_multiple_inputs else results
 
     @classmethod
@@ -417,6 +419,9 @@ class DeepExplain(object):
 
     def __init__(self, graph=None, session=tf.get_default_session()):
         self.method = None
+        self.method_instance = None
+        self.method_class = None
+        self.method_flag = None
         self.batch_size = None
         self.session = session
         self.graph = session.graph if graph is None else graph
@@ -439,29 +444,36 @@ class DeepExplain(object):
         self.override_context.__exit__(type, value, traceback)
         self.context_on = False
 
-    def explain(self, method, T, X, xs, **kwargs):
+    def explain(self, method, T, X, xs, reuse=False, **kwargs):
         if not self.context_on:
             raise RuntimeError('Explain can be called only within a DeepExplain context.')
         global _ENABLED_METHOD_CLASS, _GRAD_OVERRIDE_CHECKFLAG
-        self.method = method
-        if self.method in attribution_methods:
-            method_class, method_flag = attribution_methods[self.method]
-        else:
-            raise RuntimeError('Method must be in %s' % list(attribution_methods.keys()))
-        print('DeepExplain: running "%s" explanation method (%d)' % (self.method, method_flag))
-        self._check_ops()
-        _GRAD_OVERRIDE_CHECKFLAG = 0
+        if self.method is None or not reuse:
+            self.method = method
+            if self.method in attribution_methods:
+                self.method_class, self.method_flag = attribution_methods[self.method]
+            else:
+                raise RuntimeError('Method must be in %s' % list(attribution_methods.keys()))
+            print('DeepExplain: running "%s" explanation method (%d)' % (self.method, self.method_flag))
+            self._check_ops()
+            _GRAD_OVERRIDE_CHECKFLAG = 0
 
-        _ENABLED_METHOD_CLASS = method_class
-        method = _ENABLED_METHOD_CLASS(T, X, xs, self.session, self.keras_phase_placeholder, **kwargs)
-        result = method.run()
-        if issubclass(_ENABLED_METHOD_CLASS, GradientBasedMethod) and _GRAD_OVERRIDE_CHECKFLAG == 0:
-            warnings.warn('DeepExplain detected you are trying to use an attribution method that requires '
-                          'gradient override but the original gradient was used instead. You might have forgot to '
-                          '(re)create your graph within the DeepExlain context. Results are not reliable!')
-        _ENABLED_METHOD_CLASS = None
-        _GRAD_OVERRIDE_CHECKFLAG = 0
-        self.keras_phase_placeholder = None
+            _ENABLED_METHOD_CLASS = self.method_class
+            self.method_instance = _ENABLED_METHOD_CLASS(T, X, xs, self.session, self.keras_phase_placeholder, **kwargs)
+            result = self.method_instance.run()
+            if issubclass(_ENABLED_METHOD_CLASS, GradientBasedMethod) and _GRAD_OVERRIDE_CHECKFLAG == 0:
+                warnings.warn('DeepExplain detected you are trying to use an attribution method that requires '
+                              'gradient override but the original gradient was used instead. You might have forgot to '
+                              '(re)create your graph within the DeepExlain context. Results are not reliable!')
+        
+            if not reuse:
+                _ENABLED_METHOD_CLASS = None
+                _GRAD_OVERRIDE_CHECKFLAG = 0
+                self.keras_phase_placeholder = None
+        else:
+            self.method_instance.xs = xs
+            result = self.method_instance.run()
+
         return result
 
     @staticmethod

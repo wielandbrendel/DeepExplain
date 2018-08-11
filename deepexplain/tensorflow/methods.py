@@ -97,7 +97,7 @@ class AttributionMethod(object):
                 self.baseline = [np.zeros((1,) + xi.shape[1:]) for xi in self.xs]
             else:
                 self.baseline = np.zeros((1,) + self.xs.shape[1:])
-
+                print(f'Registered baseline shape {self.baseline.shape}')
         else:
             if self.has_multiple_inputs:
                 for i, xi in enumerate(self.xs):
@@ -110,8 +110,9 @@ class AttributionMethod(object):
                 if self.baseline.shape == self.xs.shape[1:]:
                     self.baseline = np.expand_dims(self.baseline, 0)
                 else:
-                    raise RuntimeError('Baseline shape %s does not match expected shape %s'
-                                       % (self.baseline.shape, self.xs.shape[1:]))
+                    pass
+                    #raise RuntimeError('Baseline shape %s does not match expected shape %s'
+                    #                   % (self.baseline.shape, self.xs.shape[1:]))
 
 
 class GradientBasedMethod(AttributionMethod):
@@ -207,15 +208,17 @@ class IntegratedGradients(GradientBasedMethod):
         self.steps = steps
         self.baseline = baseline
 
-    def run(self):
+    def run(self, full=False):
         # Check user baseline or set default one
         self._set_check_baseline()
 
-        attributions = self.get_symbolic_attribution()
+        if self.attributions is None or full:
+            self.attributions = self.get_symbolic_attribution()
+
         gradient = None
         for alpha in list(np.linspace(1. / self.steps, 1.0, self.steps)):
             xs_mod = [xs * alpha for xs in self.xs] if self.has_multiple_inputs else self.xs * alpha
-            _attr = self.session_run(attributions, xs_mod)
+            _attr = self.session_run(self.attributions, xs_mod)
             if gradient is None: gradient = _attr
             else: gradient = [g + a for g, a in zip(gradient, _attr)]
 
@@ -292,9 +295,12 @@ class DeepLIFTRescale(GradientBasedMethod):
         self._set_check_baseline()
 
         # Init references with a forward pass
-        self._init_references()
+        if self.attributions is None:
+            print('Init references')
+            self._init_references()
 
         # Run the default run
+        print('Entering standard run.')
         return super(DeepLIFTRescale, self).run()
 
     def _init_references(self):
